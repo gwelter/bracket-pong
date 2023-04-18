@@ -4,6 +4,8 @@ const SCREEN_WIDTH: i32 = 80;
 const SCREEN_HEIGHT: i32 = 50;
 const FRAME_DURATION: f32 = 60.0;
 const MARGIN: i32 = SCREEN_WIDTH / 25;
+const PADDLE_HEIGHT: i32 = SCREEN_HEIGHT / 10 - 1;
+const PADDLE_SPEED: i32 = SCREEN_HEIGHT / 10;
 
 enum GameMode {
     Paused,
@@ -55,7 +57,15 @@ impl Ball {
     fn draw(&self, ctx: &mut BTerm) {
         ctx.set(self.x, self.y, WHITE, BLACK, to_cp437('@'));
     }
-    fn check_collision(&mut self) {}
+    fn check_and_bounce_on_paddle(&mut self, player: &Player) {
+        let x_position_range = player.x - 1..=player.x + 1;
+        if x_position_range.contains(&self.x) {
+            if self.y >= player.y - PADDLE_HEIGHT && self.y <= player.y + PADDLE_HEIGHT {
+                self.x_velocity *= -1;
+                self.y_velocity = (self.y - player.y) / 2;
+            }
+        }
+    }
 }
 
 struct Player {
@@ -73,8 +83,7 @@ impl Player {
         }
     }
     fn draw(&self, ctx: &mut BTerm) {
-        let paddle_height = 4;
-        for i in -paddle_height..=paddle_height {
+        for i in -PADDLE_HEIGHT..=PADDLE_HEIGHT {
             ctx.set(self.x, self.y + i, WHITE, BLACK, to_cp437('#'));
         }
     }
@@ -94,9 +103,9 @@ struct Game {
 
 fn move_player_1(ctx: &mut BTerm) -> i32 {
     if ctx.key == Some(VirtualKeyCode::W) {
-        -3
+        -PADDLE_SPEED
     } else if ctx.key == Some(VirtualKeyCode::S) {
-        3
+        PADDLE_SPEED
     } else {
         0
     }
@@ -104,9 +113,9 @@ fn move_player_1(ctx: &mut BTerm) -> i32 {
 
 fn move_player_2(ctx: &mut BTerm) -> i32 {
     if ctx.key == Some(VirtualKeyCode::Up) {
-        -3
+        -PADDLE_SPEED
     } else if ctx.key == Some(VirtualKeyCode::Down) {
-        3
+        PADDLE_SPEED
     } else {
         0
     }
@@ -146,12 +155,16 @@ impl Game {
         if self.frame_rate > FRAME_DURATION {
             self.frame_rate = 0.0;
             self.ball.move_and_bounce();
+            if self.ball.x <= SCREEN_WIDTH / 2 {
+                self.ball.check_and_bounce_on_paddle(&self.player1);
+            } else {
+                self.ball.check_and_bounce_on_paddle(&self.player2);
+            }
         }
         self.player1.move_player(ctx);
         self.player2.move_player(ctx);
 
         self.render_middle_line(ctx);
-
         self.ball.draw(ctx);
         self.player1.draw(ctx);
         self.player2.draw(ctx);
