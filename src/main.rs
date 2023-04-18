@@ -5,9 +5,10 @@ const SCREEN_HEIGHT: i32 = 50;
 const FRAME_DURATION: f32 = 60.0;
 const MARGIN: i32 = SCREEN_WIDTH / 25;
 const PADDLE_HEIGHT: i32 = SCREEN_HEIGHT / 10 - 1;
-const PADDLE_SPEED: i32 = SCREEN_HEIGHT / 10;
+const PADDLE_SPEED: i32 = 3;
 
 enum GameMode {
+    Menu,
     Paused,
     Playing,
 }
@@ -28,16 +29,22 @@ impl Ball {
             y_velocity: 0,
         }
     }
+    fn reset_position(&mut self) {
+        self.x = SCREEN_WIDTH / 2;
+        self.y = SCREEN_HEIGHT / 2;
+        self.x_velocity = 0;
+        self.y_velocity = 0;
+    }
     fn start_move(&mut self) {
         let mut random = RandomNumberGenerator::new();
         self.x_velocity = loop {
-            let x = random.range(-2, 2);
+            let x = random.range(-1, 2);
             if x != 0 {
-                break x;
+                break x * 2;
             }
         };
         self.y_velocity = loop {
-            let y = random.range(-1, 1);
+            let y = random.range(-1, 2);
             if y != 0 {
                 break y;
             }
@@ -47,9 +54,6 @@ impl Ball {
         self.x += self.x_velocity;
         self.y += self.y_velocity;
 
-        if self.x < 0 || self.x > SCREEN_WIDTH - 1 {
-            self.x_velocity *= -1;
-        }
         if self.y < 0 || self.y > SCREEN_HEIGHT - 1 {
             self.y_velocity *= -1;
         }
@@ -57,20 +61,30 @@ impl Ball {
     fn draw(&self, ctx: &mut BTerm) {
         ctx.set(self.x, self.y, WHITE, BLACK, to_cp437('@'));
     }
-    fn check_and_bounce_on_paddle(&mut self, player: &Player) {
-        let x_position_range = player.x - 1..=player.x + 1;
-        if x_position_range.contains(&self.x) {
-            if self.y >= player.y - PADDLE_HEIGHT && self.y <= player.y + PADDLE_HEIGHT {
-                self.x_velocity *= -1;
-                self.y_velocity = (self.y - player.y) / 2;
+    fn bounce_and_score(&mut self, players: &[Player; 2]) -> Option<(i32, i32)> {
+        if self.x <= 0 {
+            return Some((0, 1));
+        } else if self.x >= SCREEN_WIDTH - 1 {
+            return Some((1, 0));
+        }
+
+        for player in players {
+            let x_position_range = player.x - 1..=player.x + 1;
+            if x_position_range.contains(&self.x) {
+                if self.y >= player.y - PADDLE_HEIGHT && self.y <= player.y + PADDLE_HEIGHT {
+                    self.x_velocity *= -1;
+                    self.y_velocity = (self.y - player.y) / 2;
+                }
             }
         }
+        None
     }
 }
 
 struct Player {
     x: i32,
     y: i32,
+    score: i32,
     player_move: fn(&mut BTerm) -> i32,
 }
 
@@ -79,8 +93,12 @@ impl Player {
         Self {
             x,
             y: SCREEN_HEIGHT / 2,
+            score: 0,
             player_move,
         }
+    }
+    fn reset_position(&mut self) {
+        self.y = SCREEN_HEIGHT / 2;
     }
     fn draw(&self, ctx: &mut BTerm) {
         for i in -PADDLE_HEIGHT..=PADDLE_HEIGHT {
@@ -97,8 +115,7 @@ struct Game {
     mode: GameMode,
     ball: Ball,
     frame_rate: f32,
-    player1: Player,
-    player2: Player,
+    players: [Player; 2],
 }
 
 fn move_player_1(ctx: &mut BTerm) -> i32 {
@@ -124,16 +141,24 @@ fn move_player_2(ctx: &mut BTerm) -> i32 {
 impl Game {
     fn new() -> Self {
         Self {
-            mode: GameMode::Paused,
+            mode: GameMode::Menu,
             ball: Ball::new(),
             frame_rate: 0.0,
-            player1: Player::new(MARGIN, move_player_1),
-            player2: Player::new(SCREEN_WIDTH - MARGIN, move_player_2),
+            players: [
+                Player::new(MARGIN, move_player_1),
+                Player::new(SCREEN_WIDTH - MARGIN, move_player_2),
+            ],
         }
     }
     fn wait_start(&mut self, ctx: &mut BTerm) {
         ctx.cls();
         ctx.print_centered(SCREEN_HEIGHT / 2 - 1, "Press Space to start");
+        self.reset_round(ctx);
+    }
+    fn reset_round(&mut self, ctx: &mut BTerm) {
+        self.ball.reset_position();
+        self.players[0].reset_position();
+        self.players[1].reset_position();
         if ctx.key == Some(VirtualKeyCode::Space) {
             self.mode = GameMode::Playing;
             self.ball.start_move();
@@ -149,32 +174,54 @@ impl Game {
             i += 2;
         }
     }
+    fn render_scores(&mut self, ctx: &mut BTerm, player1_score: i32, player2_score: i32) {
+        ctx.print(MARGIN, 1, player1_score.to_string());
+        ctx.print(SCREEN_WIDTH - MARGIN, 1, player2_score.to_string());
+    }
+    fn paused(&mut self, ctx: &mut BTerm) {
+        ctx.cls();
+        ctx.print_centered(SCREEN_HEIGHT / 2 - 1, "Press Space to start");
+        self.ball.draw(ctx);
+        self.render_middle_line(ctx);
+        self.render_scores(ctx, self.players[0].score, self.players[1].score);
+        self.players[0].draw(ctx);
+        self.players[1].draw(ctx);
+
+        if ctx.key == Some(VirtualKeyCode::Space) {
+            self.mode = GameMode::Playing;
+            self.ball.start_move();
+        }
+    }
     fn play(&mut self, ctx: &mut BTerm) {
         ctx.cls();
         self.frame_rate += ctx.frame_time_ms;
         if self.frame_rate > FRAME_DURATION {
             self.frame_rate = 0.0;
             self.ball.move_and_bounce();
-            if self.ball.x <= SCREEN_WIDTH / 2 {
-                self.ball.check_and_bounce_on_paddle(&self.player1);
-            } else {
-                self.ball.check_and_bounce_on_paddle(&self.player2);
+            if let Some((player1_score, player2_score)) = self.ball.bounce_and_score(&self.players)
+            {
+                self.players[0].score += player1_score;
+                self.players[1].score += player2_score;
+                self.mode = GameMode::Paused;
+                self.reset_round(ctx);
             }
         }
-        self.player1.move_player(ctx);
-        self.player2.move_player(ctx);
+        self.players[0].move_player(ctx);
+        self.players[1].move_player(ctx);
 
-        self.render_middle_line(ctx);
         self.ball.draw(ctx);
-        self.player1.draw(ctx);
-        self.player2.draw(ctx);
+        self.render_middle_line(ctx);
+        self.render_scores(ctx, self.players[0].score, self.players[1].score);
+        self.players[0].draw(ctx);
+        self.players[1].draw(ctx);
     }
 }
 
 impl GameState for Game {
     fn tick(&mut self, ctx: &mut BTerm) {
         match self.mode {
-            GameMode::Paused => self.wait_start(ctx),
+            GameMode::Menu => self.wait_start(ctx),
+            GameMode::Paused => self.paused(ctx),
             GameMode::Playing => self.play(ctx),
         }
     }
